@@ -6,25 +6,19 @@ metadata:
 spec:
   description: This task will clean up a workspace by deleting all the files.
   workspaces:
-    - name: source
+    - name: output
   steps:
     - name: remove
       image: alpine:3
-      env:
-        - name: WORKSPACE_SOURCE_PATH
-          value: $(workspaces.source.path)
-      workingDir: $(workspaces.source.path)
-      securityContext:
-        runAsNonRoot: false
-        runAsUser: 0
+      workingDir: $(workspaces.output.path)
       script: |
         #!/usr/bin/env sh
         set -eu
-        echo "Removing all files from ${WORKSPACE_SOURCE_PATH} ..."
-        if [ -d "${WORKSPACE_SOURCE_PATH}" ] ; then
-          rm -rf "${WORKSPACE_SOURCE_PATH:?}"/*
-          rm -rf "${WORKSPACE_SOURCE_PATH}"/.[!.]*
-          rm -rf "${WORKSPACE_SOURCE_PATH}"/..?*
+        echo "Removing all files from $(workspaces.output.path) ..."
+        if [ -d "$(workspaces.output.path)" ]; then
+          rm -rf "$(workspaces.output.path)"/*
+          rm -rf "$(workspaces.output.path)"/.[!.]*
+          rm -rf "$(workspaces.output.path)"/..?*
         fi
 
 ---
@@ -33,20 +27,36 @@ kind: Task
 metadata:
   name: lint
 spec:
-  description: This task runs Flake8 linting.
+  description: This task installs dependencies and runs Flake8 linting.
   workspaces:
-    - name: source
+    - name: output
   steps:
     - name: flake8
       image: python:3.9-slim
-      workingDir: $(workspaces.source.path)
+      workingDir: $(workspaces.output.path)
       script: |
         #!/bin/bash
         set -e
+        echo "DEBUG: Listing workspace files:"
+        find $(workspaces.output.path) -print
+        REQ_FILE=$(find $(workspaces.output.path) -type f -name "requirements.txt" | head -n 1)
+        if [ -z "$REQ_FILE" ]; then
+          echo "requirements.txt not found!"
+          exit 1
+        fi
+        REPO_DIR=$(dirname "$REQ_FILE")
+        echo "Found requirements.txt at $REQ_FILE"
+        echo "Using repo directory: $REPO_DIR"
         python -m pip install --upgrade pip wheel
-        pip install -r requirements.txt
-        flake8 service --count --select=E9,F63,F7,F82 --show-source --statistics
-        flake8 service --count --max-complexity=10 --max-line-length=127 --statistics
+        pip install -r "$REQ_FILE"
+        SERVICE_DIR=$(find $REPO_DIR -type d -name "service" | head -n 1)
+        if [ -z "$SERVICE_DIR" ]; then
+          echo "service folder not found!"
+          exit 1
+        fi
+        echo "Running Flake8 on $SERVICE_DIR"
+        flake8 "$SERVICE_DIR" --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 "$SERVICE_DIR" --count --max-complexity=10 --max-line-length=127 --statistics
 
 ---
 apiVersion: tekton.dev/v1
@@ -56,7 +66,7 @@ metadata:
 spec:
   description: This task installs dependencies and runs unit tests using Nose.
   workspaces:
-    - name: source
+    - name: output
   params:
     - name: args
       description: Arguments to pass to nose
@@ -65,10 +75,20 @@ spec:
   steps:
     - name: nosetests
       image: python:3.9-slim
-      workingDir: $(workspaces.source.path)
+      workingDir: $(workspaces.output.path)
       script: |
         #!/bin/bash
         set -e
+        echo "DEBUG: Listing workspace files:"
+        find $(workspaces.output.path) -print
+        REQ_FILE=$(find $(workspaces.output.path) -type f -name "requirements.txt" | head -n 1)
+        if [ -z "$REQ_FILE" ]; then
+          echo "requirements.txt not found!"
+          exit 1
+        fi
+        REPO_DIR=$(dirname "$REQ_FILE")
+        echo "Found requirements.txt at $REQ_FILE"
+        echo "Using repo directory: $REPO_DIR"
         python -m pip install --upgrade pip wheel
-        pip install -r requirements.txt
-        nosetests $(params.args)
+        pip install -r "$REQ_FILE"
+        nosetests $(params.args) "$REPO_DIR"
